@@ -1,100 +1,100 @@
 import logging
 import sqlite3
 import asyncio
-import os
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, functions
 
 # Включаем логирование
 logging.basicConfig(level=logging.INFO)
 
-# Ваши данные (берем из переменных окружения или напрямую вписываем)
-api_id = 22011892  # Ваш api_id
-api_hash = '1d2c54a27a6590697dd0668c8e4e6bcd'  # Ваш api_hash
-bot_token = '7879222970:AAExi2jRBLlCl5TgcDWXmZK_OpBmRs0Dllw'  # Ваш токен бота
+# Ваши данные
+api_id = 22011892  # Без кавычек, число
+api_hash = '1d2c54a27a6590697dd0668c8e4e6bcd'
+bot_token = '7879222970:AAExi2jRBLlCl5TgcDWXmZK_OpBmRs0Dllw'
 
-# Создаем клиент и сразу передаем токен
-client = TelegramClient('my_session', api_id, api_hash).start(bot_token=bot_token)
+# Создаем клиент с сессией через токен бота
+client = TelegramClient('bot_session', api_id, api_hash).start(bot_token=bot_token)
 
 # Канал для подписки
-CHANNEL_ID = '@your_channel'  # Замените на ваш канал
+CHANNEL_ID = '@your_channel'  # <-- замени на свой канал обязательно!
 
-# Список разрешенных администраторов по username
+# Список разрешенных администраторов
 admin_usernames = ['fiftyzz']
 
 # Создание базы данных для хранения подписчиков
 conn = sqlite3.connect('subscribers.db', check_same_thread=False)
 cursor = conn.cursor()
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS subscribers (
-    user_id INTEGER PRIMARY KEY
-)
-''')
+cursor.execute('''CREATE TABLE IF NOT EXISTS subscribers (user_id INTEGER PRIMARY KEY)''')
 conn.commit()
 
-# Стартовое сообщение
-@client.on(events.NewMessage(pattern='/start'))
-async def start(event):
-    try:
-        user_id = event.sender_id
-        # Добавляем пользователя в базу, если его нет
-        cursor.execute('SELECT 1 FROM subscribers WHERE user_id = ?', (user_id,))
-        if cursor.fetchone() is None:
-            cursor.execute('INSERT INTO subscribers (user_id) VALUES (?)', (user_id,))
-            conn.commit()
+# Обработчик всех новых сообщений
+@client.on(events.NewMessage)
+async def handler(event):
+    text = event.raw_text.strip()
 
-        # Проверяем админа
-        if event.sender.username in admin_usernames:
-            await event.respond('Привет, администратор! Вот кнопка для тебя.')
-        else:
-            await event.respond('Привет! Ты не администратор. Приятного общения!')
-
-    except Exception as e:
-        logging.error(f"Ошибка при обработке команды /start: {e}")
-
-# Подписка на канал
-@client.on(events.NewMessage(pattern='Подписаться на канал'))
-async def subscribe(event):
-    try:
-        user_id = event.sender_id
+    # Команда старт
+    if text == "/start":
         try:
-            participant = await client.get_participant(CHANNEL_ID, user_id)
-            if participant:
-                await event.respond('Вы уже подписаны на канал!')
-        except:
-            await event.respond(
-                'Для подписки перейдите по [ссылке](https://t.me/+C3aA9_mFLV00NTIy) и нажмите "Присоединиться".',
-                parse_mode='markdown'
-            )
-    except Exception as e:
-        logging.error(f"Ошибка при проверке подписки: {e}")
+            user_id = event.sender_id
+            # Добавляем пользователя в базу, если его нет
+            if user_id not in [row[0] for row in cursor.execute('SELECT user_id FROM subscribers')]:
+                cursor.execute('INSERT INTO subscribers (user_id) VALUES (?)', (user_id,))
+                conn.commit()
 
-# Кнопка администратора
-@client.on(events.NewMessage(pattern='Админская кнопка'))
-async def admin_button(event):
-    try:
-        if event.sender.username in admin_usernames:
-            await event.respond('Ты нажал на админскую кнопку!')
-        else:
-            await event.respond('Ты не можешь нажимать эту кнопку!')
-    except Exception as e:
-        logging.error(f"Ошибка при обработке админской кнопки: {e}")
+            if event.sender.username in admin_usernames:
+                await event.respond('Привет, администратор! Вот кнопка для тебя.')
+            else:
+                await event.respond('Привет! Ты не администратор. Приятного общения!')
 
-# Рассылка сообщения всем подписчикам
+        except Exception as e:
+            logging.error(f"Ошибка в /start: {e}")
+
+    # Кнопка подписки
+    elif text == "Подписаться на канал":
+        try:
+            user_id = event.sender_id
+            try:
+                participant = await client(functions.channels.GetParticipantRequest(
+                    channel=CHANNEL_ID,
+                    participant=user_id
+                ))
+                if participant:
+                    await event.respond('Вы уже подписаны на канал!')
+            except:
+                await event.respond(
+                    'Для подписки перейдите по [ссылке](https://t.me/+C3aA9_mFLV00NTIy) и нажмите "Присоединиться".',
+                    parse_mode='markdown'
+                )
+        except Exception as e:
+            logging.error(f"Ошибка при подписке: {e}")
+
+    # Админская кнопка
+    elif text == "Админская кнопка":
+        try:
+            if event.sender.username in admin_usernames:
+                await event.respond("Ты нажал на админскую кнопку!")
+            else:
+                await event.respond("Ты не можешь нажимать эту кнопку!")
+        except Exception as e:
+            logging.error(f"Ошибка в админской кнопке: {e}")
+
+# Функция для рассылки сообщения всем подписчикам
 async def send_message_to_all_subscribers(message_text):
     try:
-        for (user_id,) in cursor.execute('SELECT user_id FROM subscribers'):
+        for subscriber in cursor.execute('SELECT user_id FROM subscribers'):
             try:
-                await client.send_message(user_id, message_text)
+                await client.send_message(subscriber[0], message_text)
             except Exception as e:
-                logging.error(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
+                logging.error(f"Не удалось отправить сообщение пользователю {subscriber[0]}: {e}")
     except Exception as e:
         logging.error(f"Ошибка при рассылке сообщения: {e}")
 
-# Основная функция
+# Основная функция запуска
 async def main():
-    logging.info("Бот запущен...")
-    await client.run_until_disconnected()
+    try:
+        logging.info("Бот запущен...")
+        await client.run_until_disconnected()
+    except Exception as e:
+        logging.error(f"Ошибка при запуске бота: {e}")
 
-# Старт
-if __name__ == '__main__':
-    asyncio.run(main())
+# Запуск
+asyncio.run(main())
